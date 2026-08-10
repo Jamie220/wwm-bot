@@ -1,9 +1,9 @@
 name: WWM Code Tracker
 
 on:
-  # Run automatically every day
+  # Run automatically every 5 hours
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 */5 * * *"
 
   # Also allow manual testing
   workflow_dispatch:
