@@ -2,7 +2,7 @@ name: Cron Test
 
 on:
   schedule:
-    - cron: "3,13,23,33,43,53 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
       timezone: "Australia/Melbourne"
 
   workflow_dispatch:
