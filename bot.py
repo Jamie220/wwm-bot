@@ -121,21 +121,25 @@ def send_discord_notification(new_codes, total_active):
     )
 
     payload = {
-        "embeds": [
-            {
-                "title": "✨ New WWM Redemption Code",
-                "url": SITE_URL,
-                "description": (
-                    f"🎁 **Found {len(new_codes)} new code(s)!**\n\n"
-                    f"{code_text}\n\n"
-                    f"📊 **Total active codes:** {total_active}"
-                ),
-                "color": 0x5865F2,
-                "footer": {
-                    "text": "Source: codes.yar.gg"
-                }
+    "content": "@everyone",
+    "allowed_mentions": {
+        "parse": ["everyone"]
+    },
+    "embeds": [
+        {
+            "title": "✨ New WWM Redemption Code",
+            "url": SITE_URL,
+            "description": (
+                f"🎁 **Found {len(new_codes)} new code(s)!**\n\n"
+                f"{code_text}\n\n"
+                f"📊 **Total active codes:** {total_active}"
+            ),
+            "color": 0x5865F2,
+            "footer": {
+                "text": "Source: codes.yar.gg"
             }
-        ]
+        }
+    ]
     }
 
     response = requests.post(
