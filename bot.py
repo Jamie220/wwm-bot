@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -17,13 +18,47 @@ SITE_URL = "https://codes.yar.gg/"
 DATA_FILE = Path("codes.json")
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# --------------------------------------------------
+# Get Time
+# --------------------------------------------------
+
+def parse_added_date(tooltip):
+    """
+    Convert:
+    'Added to site on 07/26 at 19:40 in local time...'
+    into:
+    '2026-07-26'
+    """
+
+    if not tooltip:
+        return None
+
+    try:
+        date_part = tooltip.split("Added to site on ")[1].split(" at ")[0]
+
+        month, day = map(int, date_part.split("/"))
+
+        now = datetime.now()
+        year = now.year
+
+        # Handle year rollover:
+        # e.g. if today is Jan 2027 but code date says 12/30,
+        # treat it as Dec 2026.
+        if now.month == 1 and month == 12:
+            year -= 1
+
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    except Exception:
+        return None
+
 
 # --------------------------------------------------
 # Get Active Codes
 # --------------------------------------------------
 
 def get_active_codes():
-    """Get the current Active Codes from codes.yar.gg."""
+    """Get current active codes together with their added date."""
 
     print("Opening website...")
 
@@ -41,10 +76,28 @@ def get_active_codes():
         codes = []
 
         for i in range(count):
-            value = code_inputs.nth(i).input_value().strip()
+            code_input = code_inputs.nth(i)
 
-            if value:
-                codes.append(value)
+            code = code_input.input_value().strip()
+
+            if not code:
+                continue
+
+            # Find the containing row/card for this code
+            container = code_input.locator("xpath=ancestor::*[.//button[contains(@class,'code-date')]][1]")
+
+            date_button = container.locator("button.code-date")
+
+            added_date = None
+
+            if date_button.count() > 0:
+                tooltip = date_button.first.get_attribute("data-tooltip")
+                added_date = parse_added_date(tooltip)
+
+            codes.append({
+                "code": code,
+                "date": added_date
+            })
 
         browser.close()
 
@@ -90,16 +143,32 @@ def save_codes(codes):
 # --------------------------------------------------
 
 def compare_codes(current_codes, previous_codes):
-    """Compare current codes with the previous saved list."""
+    """Compare current codes against previous codes by code value."""
+
+    # Previous codes may still be stored as plain strings
+    previous_code_values = set()
+
+    for item in previous_codes:
+        if isinstance(item, dict):
+            previous_code_values.add(item.get("code"))
+        else:
+            previous_code_values.add(item)
+
+    current_code_values = {
+        item["code"]
+        for item in current_codes
+    }
 
     new_codes = [
-        code for code in current_codes
-        if code not in previous_codes
+        item
+        for item in current_codes
+        if item["code"] not in previous_code_values
     ]
 
     removed_codes = [
-        code for code in previous_codes
-        if code not in current_codes
+        code
+        for code in previous_code_values
+        if code not in current_code_values
     ]
 
     return new_codes, removed_codes
@@ -116,8 +185,8 @@ def send_discord_notification(new_codes, total_active):
         raise ValueError("DISCORD_WEBHOOK_URL not found in .env")
 
     code_text = "\n".join(
-        f"`{code}`"
-        for code in new_codes
+        f"`{item['code']}` - Release Date: {item['date'] or 'Unknown date'}"
+        for item in new_codes
     )
 
     payload = {
@@ -127,7 +196,7 @@ def send_discord_notification(new_codes, total_active):
     },
     "embeds": [
         {
-            "title": "✨ New WWM Redemption Code",
+            "title": "✨ New WWM Redemption Code from DaMeng1 APP",
             "url": SITE_URL,
             "description": (
                 f"🎁 **Found {len(new_codes)} new code(s)!**\n\n"
@@ -147,6 +216,12 @@ def send_discord_notification(new_codes, total_active):
         json=payload,
         timeout=30
     )
+    # Helpful if Discord rejects the payload
+    if not response.ok:
+        print("Discord error:")
+        print(response.status_code)
+        print(response.text)
+
 
     response.raise_for_status()
 
