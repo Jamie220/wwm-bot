@@ -58,7 +58,7 @@ def parse_added_date(tooltip):
 # --------------------------------------------------
 
 def get_active_codes():
-    """Get current active codes together with their added date."""
+    """Get ONLY current active codes from the Active Codes section."""
 
     print("Opening website...")
 
@@ -66,32 +66,50 @@ def get_active_codes():
         browser = p.chromium.launch(headless=True)
 
         page = browser.new_page()
-        page.goto(SITE_URL, wait_until="networkidle")
+        page.goto(
+            SITE_URL,
+            wait_until="networkidle",
+            timeout=60000
+        )
 
         print("Website loaded successfully.")
 
-        code_inputs = page.locator("input.code-field")
-        count = code_inputs.count()
+        # IMPORTANT:
+        # Only scrape cards inside <section id="codes">
+        active_cards = page.locator(
+            "section#codes > article.code-card"
+        )
+
+        count = active_cards.count()
+
+        print(f"Active cards found: {count}")
 
         codes = []
 
         for i in range(count):
-            code_input = code_inputs.nth(i)
+            card = active_cards.nth(i)
 
-            code = code_input.input_value().strip()
+            # Read the code from THIS card
+            code_input = card.locator("input.code-field")
+
+            if code_input.count() == 0:
+                continue
+
+            code = code_input.first.input_value().strip()
 
             if not code:
                 continue
 
-            # Find the containing row/card for this code
-            container = code_input.locator("xpath=ancestor::*[.//button[contains(@class,'code-date')]][1]")
-
-            date_button = container.locator("button.code-date")
+            # Read the date from THIS SAME card
+            date_button = card.locator("button.code-date")
 
             added_date = None
 
             if date_button.count() > 0:
-                tooltip = date_button.first.get_attribute("data-tooltip")
+                tooltip = date_button.first.get_attribute(
+                    "data-tooltip"
+                )
+
                 added_date = parse_added_date(tooltip)
 
             codes.append({
@@ -196,7 +214,7 @@ def send_discord_notification(new_codes, total_active):
     },
     "embeds": [
         {
-            "title": "✨ New WWM Redemption Code from DaMeng1 APP",
+            "title": "✨ New WWM Redemption Code",
             "url": SITE_URL,
             "description": (
                 f"🎁 **Found {len(new_codes)} new code(s)!**\n\n"
@@ -227,6 +245,34 @@ def send_discord_notification(new_codes, total_active):
 
     print("Discord notification sent successfully!")
 
+def validate_active_codes(codes):
+    """Basic safety checks before saving or notifying."""
+
+    if not codes:
+        raise RuntimeError(
+            "No active codes were scraped. "
+            "Stopping to avoid corrupting codes.json."
+        )
+
+    code_values = [
+        item["code"]
+        for item in codes
+    ]
+
+    if len(code_values) != len(set(code_values)):
+        raise RuntimeError(
+            "Duplicate active codes detected. "
+            "Stopping for safety."
+        )
+
+    # Safety check against obviously incomplete page loads
+    if len(codes) < 20:
+        raise RuntimeError(
+            f"Only {len(codes)} active codes were scraped. "
+            "This looks abnormal, so the run is being stopped."
+        )
+
+    return True
 
 # --------------------------------------------------
 # Main
@@ -243,6 +289,8 @@ def main():
 
     current_codes = get_active_codes()
 
+    validate_active_codes(current_codes)
+
     print(f"Current active codes: {len(current_codes)}")
 
     new_codes, removed_codes = compare_codes(
@@ -257,8 +305,8 @@ def main():
     if new_codes:
         print(f"\nNew codes found: {len(new_codes)}")
 
-        for code in new_codes:
-            print(f"  + {code}")
+        for item in new_codes:
+            print(f"  + {item['code']} - {item['date']}")
 
         # Send Discord notification
         send_discord_notification(
