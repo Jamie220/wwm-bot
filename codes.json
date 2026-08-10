@@ -1,7 +1,7 @@
 {
   "active_codes": [
     {
-      "code": "QWD3FPYYCM",
+      "code": "JPP8WCWPHE",
       "date": "2026-08-08"
     },
     {
@@ -343,6 +343,7 @@
     {
       "code": "CH8AJWFRRR",
       "date": "2026-07-24"
+<<<<<<< HEAD
     },
     {
       "code": "MN6MXF8QPE",
@@ -447,6 +448,8 @@
     {
       "code": "TF33HXJMJC",
       "date": "2026-06-29"
+=======
+>>>>>>> e47e1e4a884aa78b3201b391b7f30e7d8374b5fc
     }
   ]
 }
