@@ -208,10 +208,6 @@ def send_discord_notification(new_codes, total_active):
     )
 
     payload = {
-    "content": "@everyone",
-    "allowed_mentions": {
-        "parse": ["everyone"]
-    },
     "embeds": [
         {
             "title": "✨ New WWM Redemption Code",
