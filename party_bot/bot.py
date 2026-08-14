@@ -1,29 +1,60 @@
 import os
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
+from pathlib import Path
+import database as db
 
 
-# =========================
-# ENV / CONFIG
-# =========================
+# ============================================================
+# ENV
+# ============================================================
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
+
+load_dotenv(ROOT_DIR / ".env")
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-
-GUILD_ID = 1444137048117215535
 
 if not TOKEN:
     raise ValueError("DISCORD_BOT_TOKEN was not found in .env")
 
 
-# =========================
+# ============================================================
+# CONFIG
+# ============================================================
+
+# Discord Server ID
+GUILD_ID = 1444137048117215535
+
+# #general 的 Channel ID 
+GENERAL_CHANNEL_ID = 1444137048574263430
+
+
+REMINDER_MINUTES_BEFORE = 5
+
+# Scheduler 每多少秒检查一次
+REMINDER_CHECK_SECONDS = 30
+
+# 活动使用的时区
+PARTY_TIMEZONE = ZoneInfo("Australia/Melbourne")
+
+
+# ============================================================
+# ACTIVE PARTIES
+# ============================================================
+
+active_parties = []
+database_restored = False
+
+# ============================================================
 # BOT SETUP
-# =========================
+# ============================================================
 
 intents = discord.Intents.default()
 
@@ -31,6 +62,69 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents
 )
+
+
+# ============================================================
+# TIME FUNCTIONS
+# ============================================================
+
+def parse_party_time(time_string: str):
+    """
+    Convert HH:MM into the next occurrence of that time
+    in PARTY_TIMEZONE.
+
+    Example:
+    Current time: 19:00
+    Input: 23:00
+    -> Today 23:00
+
+    Current time: 23:30
+    Input: 00:30
+    -> Tomorrow 00:30
+    """
+
+    try:
+        parsed_time = datetime.strptime(
+            time_string,
+            "%H:%M"
+        ).time()
+
+    except ValueError:
+        return None
+
+    now = datetime.now(PARTY_TIMEZONE)
+
+    start_datetime = datetime.combine(
+        now.date(),
+        parsed_time,
+        tzinfo=PARTY_TIMEZONE
+    )
+
+    # If that time has already passed today,
+    # use tomorrow instead
+    if start_datetime <= now:
+        start_datetime += timedelta(days=1)
+
+    return start_datetime
+
+
+def format_party_datetime(dt: datetime):
+    """
+    Display time nicely.
+    """
+
+    now = datetime.now(PARTY_TIMEZONE)
+
+    if dt.date() == now.date():
+        day_text = "今天"
+
+    elif dt.date() == (now + timedelta(days=1)).date():
+        day_text = "明天"
+
+    else:
+        day_text = dt.strftime("%d/%m")
+
+    return f"{day_text} {dt.strftime('%H:%M')}"
 
 
 # ============================================================
@@ -54,7 +148,9 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
 
         try:
             new_max = int(self.new_max.value)
+
         except ValueError:
+
             await interaction.response.send_message(
                 "❌ 请输入有效数字。",
                 ephemeral=True
@@ -62,6 +158,7 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
             return
 
         if new_max < 1 or new_max > 50:
+
             await interaction.response.send_message(
                 "❌ 人数上限必须在 1–50 之间。",
                 ephemeral=True
@@ -71,6 +168,7 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
         current_players = len(self.party_view.players)
 
         if new_max < current_players:
+
             await interaction.response.send_message(
                 f"❌ 当前已有 {current_players} 名正式成员，"
                 f"人数上限不能改成 {new_max}。",
@@ -79,6 +177,11 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
             return
 
         self.party_view.max_players = new_max
+        if self.party_view.party_id is not None:
+            db.update_max_players(
+                self.party_view.party_id,
+                new_max
+    )
 
         await self.party_view.refresh_message()
 
@@ -89,12 +192,13 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
 
 
 # ============================================================
-# ADD PLAYER SELECT
+# ADD PLAYER
 # ============================================================
 
 class AddPlayerSelect(discord.ui.UserSelect):
 
     def __init__(self, party_view):
+
         super().__init__(
             placeholder="选择要加入正式队伍的玩家",
             min_values=1,
@@ -108,6 +212,7 @@ class AddPlayerSelect(discord.ui.UserSelect):
         member = self.values[0]
 
         if member.bot:
+
             await interaction.response.send_message(
                 "❌ 不能添加 Bot。",
                 ephemeral=True
@@ -115,6 +220,7 @@ class AddPlayerSelect(discord.ui.UserSelect):
             return
 
         if member.id in self.party_view.players:
+
             await interaction.response.send_message(
                 f"{member.mention} 已经在正式队伍里了。",
                 ephemeral=True
@@ -122,17 +228,25 @@ class AddPlayerSelect(discord.ui.UserSelect):
             return
 
         if len(self.party_view.players) >= self.party_view.max_players:
+
             await interaction.response.send_message(
                 "❌ 队伍已经满员。",
                 ephemeral=True
             )
             return
 
-        # 如果原本在可黑工名单，转为正式成员
+        # 可黑工 -> 正式成员
         if member.id in self.party_view.helpers:
             self.party_view.helpers.remove(member.id)
 
         self.party_view.players.append(member.id)
+        if self.party_view.party_id is not None:
+            db.set_member(
+                self.party_view.party_id,
+                member.id,
+                "player"
+            )
+
 
         await self.party_view.refresh_message()
 
@@ -145,6 +259,7 @@ class AddPlayerSelect(discord.ui.UserSelect):
 class AddPlayerView(discord.ui.View):
 
     def __init__(self, party_view):
+
         super().__init__(timeout=60)
 
         self.add_item(
@@ -153,12 +268,13 @@ class AddPlayerView(discord.ui.View):
 
 
 # ============================================================
-# REMOVE PLAYER SELECT
+# REMOVE PLAYER
 # ============================================================
 
 class RemovePlayerSelect(discord.ui.UserSelect):
 
     def __init__(self, party_view):
+
         super().__init__(
             placeholder="选择要移除的玩家",
             min_values=1,
@@ -182,11 +298,17 @@ class RemovePlayerSelect(discord.ui.UserSelect):
             removed = True
 
         if not removed:
+
             await interaction.response.send_message(
                 f"❌ {member.mention} 不在这个活动里。",
                 ephemeral=True
             )
             return
+        if self.party_view.party_id is not None:
+            db.remove_member(
+            self.party_view.party_id,
+            member.id
+    )
 
         await self.party_view.refresh_message()
 
@@ -199,6 +321,7 @@ class RemovePlayerSelect(discord.ui.UserSelect):
 class RemovePlayerView(discord.ui.View):
 
     def __init__(self, party_view):
+
         super().__init__(timeout=60)
 
         self.add_item(
@@ -213,6 +336,7 @@ class RemovePlayerView(discord.ui.View):
 class CancelConfirmView(discord.ui.View):
 
     def __init__(self, party_view):
+
         super().__init__(timeout=30)
 
         self.party_view = party_view
@@ -229,9 +353,13 @@ class CancelConfirmView(discord.ui.View):
     ):
 
         self.party_view.cancelled = True
+        if self.party_view.party_id is not None:
+            db.cancel_party(
+                self.party_view.party_id
+            )
 
-        # Disable main party buttons
         for item in self.party_view.children:
+
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
 
@@ -260,12 +388,13 @@ class CancelConfirmView(discord.ui.View):
 
 
 # ============================================================
-# ORGANIZER MANAGEMENT PANEL
+# MANAGE VIEW
 # ============================================================
 
 class ManageView(discord.ui.View):
 
     def __init__(self, party_view):
+
         super().__init__(timeout=120)
 
         self.party_view = party_view
@@ -298,7 +427,10 @@ class ManageView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        if not self.party_view.players and not self.party_view.helpers:
+        if (
+            not self.party_view.players
+            and not self.party_view.helpers
+        ):
 
             await interaction.response.send_message(
                 "当前没有玩家可以移除。",
@@ -354,26 +486,35 @@ class PartyView(discord.ui.View):
     def __init__(
         self,
         activity_name: str,
-        start_time: str,
+        start_datetime: datetime,
         max_players: int,
-        organizer: discord.Member
+        organizer,
+        party_id=None
     ):
 
         super().__init__(timeout=None)
+        self.party_id = party_id
 
         self.activity_name = activity_name
-        self.start_time = start_time
+
+        self.start_datetime = start_datetime
+
         self.max_players = max_players
+
         self.organizer = organizer
 
         # 正式成员
         self.players = []
 
-        # 可黑工，不计入正式人数
+        # 可黑工
         self.helpers = []
 
         self.message = None
+
         self.cancelled = False
+
+        # Prevent duplicate reminders
+        self.reminder_sent = False
 
 
     # ========================================================
@@ -401,7 +542,9 @@ class PartyView(discord.ui.View):
 
         embed.add_field(
             name="🕚 发车时间",
-            value=self.start_time,
+            value=format_party_datetime(
+                self.start_datetime
+            ),
             inline=True
         )
 
@@ -417,10 +560,7 @@ class PartyView(discord.ui.View):
             inline=False
         )
 
-        # -------------------------
-        # 正式成员名单
-        # -------------------------
-
+        # 正式成员
         if self.players:
 
             player_mentions = "\n".join(
@@ -438,10 +578,7 @@ class PartyView(discord.ui.View):
             inline=False
         )
 
-        # -------------------------
-        # 可黑工名单
-        # -------------------------
-
+        # 可黑工
         if self.helpers:
 
             helper_mentions = "\n".join(
@@ -459,10 +596,7 @@ class PartyView(discord.ui.View):
             inline=False
         )
 
-        # -------------------------
         # Status
-        # -------------------------
-
         if not self.cancelled:
 
             if current_players >= self.max_players:
@@ -475,23 +609,32 @@ class PartyView(discord.ui.View):
 
             else:
 
-                remaining = self.max_players - current_players
+                remaining = (
+                    self.max_players
+                    - current_players
+                )
 
                 embed.add_field(
                     name="📌 状态",
-                    value=f"还差 **{remaining}** 名正式成员！",
+                    value=(
+                        f"还差 **{remaining}** "
+                        f"名正式成员！"
+                    ),
                     inline=False
                 )
 
             embed.set_footer(
-                text="Join = 正式参战 ｜ 可黑工 = 可支援但不计入人数"
+                text=(
+                    "Join = 正式参战 ｜ "
+                    "可黑工 = 可支援但不计入人数"
+                )
             )
 
         return embed
 
 
     # ========================================================
-    # REFRESH ORIGINAL PARTY MESSAGE
+    # REFRESH MESSAGE
     # ========================================================
 
     async def refresh_message(self):
@@ -502,18 +645,6 @@ class PartyView(discord.ui.View):
                 embed=self.build_embed(),
                 view=self
             )
-
-
-    # ========================================================
-    # BUTTON STATUS
-    # ========================================================
-
-    def update_buttons(self):
-
-        # Keep Join / Helper / Leave active
-        self.join_button.disabled = False
-        self.helper_button.disabled = False
-        self.leave_button.disabled = False
 
 
     # ========================================================
@@ -542,7 +673,6 @@ class PartyView(discord.ui.View):
 
         user_id = interaction.user.id
 
-        # 已经是正式成员
         if user_id in self.players:
 
             await interaction.response.send_message(
@@ -551,7 +681,6 @@ class PartyView(discord.ui.View):
             )
             return
 
-        # 队伍已满
         if len(self.players) >= self.max_players:
 
             await interaction.response.send_message(
@@ -560,11 +689,18 @@ class PartyView(discord.ui.View):
             )
             return
 
-        # 如果原本是可黑工，则转为正式成员
+        # 可黑工 -> 正式成员
         if user_id in self.helpers:
             self.helpers.remove(user_id)
 
         self.players.append(user_id)
+
+        if self.party_id is not None:
+            db.set_member(
+                self.party_id,
+                user_id,
+                "player"
+            )
 
         await interaction.response.edit_message(
             embed=self.build_embed(),
@@ -573,7 +709,7 @@ class PartyView(discord.ui.View):
 
 
     # ========================================================
-    # HELPER / 可黑工
+    # 可黑工
     # ========================================================
 
     @discord.ui.button(
@@ -598,7 +734,6 @@ class PartyView(discord.ui.View):
 
         user_id = interaction.user.id
 
-        # 已经在可黑工名单
         if user_id in self.helpers:
 
             await interaction.response.send_message(
@@ -607,11 +742,17 @@ class PartyView(discord.ui.View):
             )
             return
 
-        # 如果原本是正式成员，则转为可黑工
+        # 正式 -> 可黑工
         if user_id in self.players:
             self.players.remove(user_id)
 
         self.helpers.append(user_id)
+        if self.party_id is not None:
+            db.set_member(
+                self.party_id,
+                user_id,
+                "helper"
+            )
 
         await interaction.response.edit_message(
             embed=self.build_embed(),
@@ -648,10 +789,21 @@ class PartyView(discord.ui.View):
         if user_id in self.players:
 
             self.players.remove(user_id)
+            if self.party_id is not None:
+                db.remove_member(
+                    self.party_id,
+                    user_id
+                )
+
 
         elif user_id in self.helpers:
 
             self.helpers.remove(user_id)
+            if self.party_id is not None:
+                db.remove_member(
+                    self.party_id,
+                    user_id
+                )
 
         else:
 
@@ -683,7 +835,6 @@ class PartyView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        # ONLY ORGANIZER CAN ACCESS
         if interaction.user.id != self.organizer.id:
 
             await interaction.response.send_message(
@@ -702,22 +853,336 @@ class PartyView(discord.ui.View):
 
         await interaction.response.send_message(
             f"⚙️ **管理：{self.activity_name}**\n\n"
-            f"正式成员：{len(self.players)} / {self.max_players}\n"
-            f"可黑工：{len(self.helpers)} 人",
+            f"正式成员："
+            f"{len(self.players)} / "
+            f"{self.max_players}\n"
+            f"可黑工："
+            f"{len(self.helpers)} 人",
             view=ManageView(self),
             ephemeral=True
         )
 
 
 # ============================================================
-# TEST COMMAND
+# REMINDER FUNCTION
+# ============================================================
+
+async def send_party_reminder(party):
+
+    # Don't send twice
+    if party.reminder_sent:
+        return
+
+    # Don't remind cancelled party
+    if party.cancelled:
+        return
+
+    # Mark first to protect against duplicate scheduler runs
+    party.reminder_sent = True
+
+    if party.party_id is not None:
+        db.mark_reminder_sent(
+        party.party_id
+    )
+
+    # Nobody joined
+    if not party.players:
+        print(
+            f"ℹ️ Reminder skipped: "
+            f"{party.activity_name} has no players."
+        )
+        return
+
+    channel = bot.get_channel(
+        GENERAL_CHANNEL_ID
+    )
+
+    if channel is None:
+
+        print(
+            "❌ General channel could not be found. "
+            "Check GENERAL_CHANNEL_ID."
+        )
+
+        # Allow retry after config/error correction
+        party.reminder_sent = False
+        if party.party_id is not None:
+            db.reset_reminder(
+                party.party_id
+        )
+        return
+
+    mentions = " ".join(
+        f"<@{user_id}>"
+        for user_id in party.players
+    )
+
+    now = datetime.now(
+        PARTY_TIMEZONE
+    )
+
+    minutes_remaining = (
+        party.start_datetime - now
+    ).total_seconds() / 60
+
+    # If created inside reminder window
+    if minutes_remaining < REMINDER_MINUTES_BEFORE:
+
+        message = (
+            f"🔔 **{party.activity_name} 即将发车！**\n\n"
+            f"{mentions}\n\n"
+            f"距离发车不足 "
+            f"**{REMINDER_MINUTES_BEFORE} 分钟**，"
+            f"请准备上线。\n"
+            f"🕚 发车时间："
+            f"{party.start_datetime.strftime('%H:%M')}"
+        )
+
+    else:
+
+        message = (
+            f"🔔 **{party.activity_name} "
+            f"还有 {REMINDER_MINUTES_BEFORE} 分钟发车！**\n\n"
+            f"{mentions}\n\n"
+            f"请准备上线。\n"
+            f"🕚 发车时间："
+            f"{party.start_datetime.strftime('%H:%M')}"
+        )
+
+    try:
+
+        await channel.send(
+            message,
+            allowed_mentions=discord.AllowedMentions(
+                users=True,
+                roles=False,
+                everyone=False
+            )
+        )
+
+        print(
+            f"🔔 Reminder sent: "
+            f"{party.activity_name}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"❌ Failed to send reminder: {e}"
+        )
+
+        # Allow scheduler to retry
+        party.reminder_sent = False
+
+        if party.party_id is not None:
+            db.reset_reminder(
+                party.party_id
+            )
+
+
+# ============================================================
+# REMINDER SCHEDULER
+# ============================================================
+
+@tasks.loop(
+    seconds=REMINDER_CHECK_SECONDS
+)
+async def reminder_scheduler():
+
+    now = datetime.now(
+        PARTY_TIMEZONE
+    )
+
+    for party in active_parties.copy():
+
+        # Party already finished
+        if now > party.start_datetime:
+
+            if party.party_id is not None:
+                db.complete_party(
+                    party.party_id
+                )
+
+            active_parties.remove(
+                party
+            )
+
+            print(
+                f"🧹 Party completed: "
+                f"{party.activity_name}"
+            )
+
+            continue
+
+        # Ignore cancelled parties
+        if party.cancelled:
+            continue
+
+        # Already reminded
+        if party.reminder_sent:
+            continue
+
+        reminder_time = (
+            party.start_datetime
+            - timedelta(
+                minutes=REMINDER_MINUTES_BEFORE
+            )
+        )
+
+        if now >= reminder_time:
+
+            if now <= party.start_datetime:
+
+                await send_party_reminder(
+                    party
+                )
+
+@reminder_scheduler.before_loop
+async def before_reminder_scheduler():
+
+    await bot.wait_until_ready()
+
+
+# ============================================================
+# RECOVER DATABASE
+# ============================================================
+async def restore_parties():
+
+    global database_restored
+
+    if database_restored:
+        return
+
+    database_restored = True
+
+    rows = db.get_active_parties()
+
+    print(
+        f"💾 Found {len(rows)} active party(s) "
+        f"in database."
+    )
+
+    now = datetime.now(PARTY_TIMEZONE)
+
+    for row in rows:
+
+        start_datetime = datetime.fromisoformat(
+            row["start_datetime"]
+        )
+
+        # Ignore parties that have already finished
+        if start_datetime <= now:
+            db.complete_party(
+            row["id"]
+        )
+            continue
+
+        guild = bot.get_guild(
+            row["guild_id"]
+        )
+
+        if guild is None:
+            continue
+
+        channel = bot.get_channel(
+            row["channel_id"]
+        )
+
+        if channel is None:
+            continue
+
+        try:
+            message = await channel.fetch_message(
+                row["message_id"]
+            )
+
+        except discord.NotFound:
+            print(
+                f"⚠️ Party message "
+                f"{row['message_id']} no longer exists."
+            )
+            continue
+
+        organizer = guild.get_member(
+            row["organizer_id"]
+        )
+
+        if organizer is None:
+
+            try:
+                organizer = await guild.fetch_member(
+                    row["organizer_id"]
+                )
+
+            except discord.NotFound:
+                continue
+
+        view = PartyView(
+            activity_name=row["activity_name"],
+            start_datetime=start_datetime,
+            max_players=row["max_players"],
+            organizer=organizer,
+            party_id=row["id"]
+        )
+
+        view.message = message
+
+        view.cancelled = bool(
+            row["cancelled"]
+        )
+
+        view.reminder_sent = bool(
+            row["reminder_sent"]
+        )
+
+        members = db.get_party_members(
+            row["id"]
+        )
+
+        for member in members:
+
+            if member["member_type"] == "player":
+
+                view.players.append(
+                    member["user_id"]
+                )
+
+            elif member["member_type"] == "helper":
+
+                view.helpers.append(
+                    member["user_id"]
+                )
+
+        # Register persistent buttons with Discord
+        bot.add_view(
+            view,
+            message_id=row["message_id"]
+        )
+
+        active_parties.append(
+            view
+        )
+
+        # Refresh Discord message
+        await view.refresh_message()
+
+        print(
+            f"♻️ Restored: "
+            f"{view.activity_name} | "
+            f"{len(view.players)}/{view.max_players}"
+        )
+
+# ============================================================
+# TEST
 # ============================================================
 
 @bot.tree.command(
     name="test",
     description="Check whether WWM Bot is online"
 )
-async def test(interaction: discord.Interaction):
+async def test(
+    interaction: discord.Interaction
+):
 
     await interaction.response.send_message(
         "✅ WWM Party Bot is online!",
@@ -735,7 +1200,7 @@ async def test(interaction: discord.Interaction):
 )
 @app_commands.describe(
     activity="活动名称，例如：百业十人本",
-    time="发车时间，例如：23:00",
+    time="发车时间，24小时制，例如：23:00",
     max_players="正式参战人数上限，例如：3 或 10"
 )
 async def party(
@@ -753,9 +1218,31 @@ async def party(
         )
         return
 
+    # -------------------------
+    # Parse / validate time
+    # -------------------------
+
+    start_datetime = parse_party_time(
+        time.strip()
+    )
+
+    if start_datetime is None:
+
+        await interaction.response.send_message(
+            "❌ **时间格式不正确。**\n\n"
+            "请使用24小时制 `HH:MM`\n"
+            "例如：`20:00`、`23:30`、`00:30`",
+            ephemeral=True
+        )
+        return
+
+    # -------------------------
+    # Create party
+    # -------------------------
+
     view = PartyView(
         activity_name=activity,
-        start_time=time,
+        start_datetime=start_datetime,
         max_players=max_players,
         organizer=interaction.user
     )
@@ -765,8 +1252,32 @@ async def party(
         view=view
     )
 
-    # Store original activity message
-    view.message = await interaction.original_response()
+    view.message = (
+        await interaction.original_response()
+    )
+
+    # Save party to database
+    view.party_id = db.create_party(
+    guild_id=interaction.guild.id,
+    channel_id=view.message.channel.id,
+    message_id=view.message.id,
+    activity_name=view.activity_name,
+    start_datetime=view.start_datetime.isoformat(),
+    max_players=view.max_players,
+    organizer_id=interaction.user.id,
+    created_at=datetime.now(PARTY_TIMEZONE).isoformat()
+)
+
+    active_parties.append(
+        view
+    )
+
+    print(
+        f"🎮 Party created: "
+        f"{activity} | "
+        f"{start_datetime.isoformat()} | "
+        f"Max {max_players}"
+    )
 
 
 # ============================================================
@@ -776,8 +1287,23 @@ async def party(
 @bot.event
 async def on_ready():
 
-    print(f"✅ Logged in as {bot.user}")
-    print(f"✅ Bot ID: {bot.user.id}")
+    print(
+        f"✅ Logged in as {bot.user}"
+    )
+
+    print(
+        f"✅ Bot ID: {bot.user.id}"
+    )
+
+    print(
+        f"🕒 Party timezone: "
+        f"{PARTY_TIMEZONE}"
+    )
+
+    print(
+        f"🔔 Reminder: "
+        f"{REMINDER_MINUTES_BEFORE} minutes before"
+    )
 
     guild = discord.Object(
         id=GUILD_ID
@@ -794,12 +1320,15 @@ async def on_ready():
         )
 
         print(
-            f"✅ Synced {len(synced)} slash command(s) "
+            f"✅ Synced {len(synced)} "
+            f"slash command(s) "
             f"to guild {GUILD_ID}"
         )
 
         for command in synced:
-            print(f"   /{command.name}")
+            print(
+                f"   /{command.name}"
+            )
 
     except Exception as e:
 
@@ -807,9 +1336,23 @@ async def on_ready():
             f"❌ Failed to sync commands: {e}"
         )
 
+    await restore_parties()
+
+    # Start scheduler only once
+    if not reminder_scheduler.is_running():
+
+        reminder_scheduler.start()
+
+        print(
+            f"✅ Reminder scheduler started "
+            f"(check every "
+            f"{REMINDER_CHECK_SECONDS}s)"
+        )
+
+
 
 # ============================================================
 # START BOT
 # ============================================================
-
+db.init_database()
 bot.run(TOKEN)
