@@ -32,17 +32,44 @@ if not TOKEN:
 # Discord Server ID
 GUILD_ID = 1444137048117215535
 
-# #general 的 Channel ID 
+# #general Channel ID
 GENERAL_CHANNEL_ID = 1444137048574263430
 
-
+# Reminder X minutes before party starts
 REMINDER_MINUTES_BEFORE = 5
 
-# Scheduler 每多少秒检查一次
+# Scheduler check interval
 REMINDER_CHECK_SECONDS = 30
 
-# 活动使用的时区
+# Party timezone
 PARTY_TIMEZONE = ZoneInfo("Australia/Melbourne")
+
+
+# ============================================================
+# UI TEXT
+# ============================================================
+
+TEXT = {
+    # General
+    "today": "今天 / Today",
+    "tomorrow": "明天 / Tomorrow",
+    "none": "暂无 / None",
+
+    # Party embed
+    "start_time": "🕚 发车时间 / Start Time",
+    "player_count": "👥 正式人数 / Party Players",
+    "organizer": "👤 组织者 / Organizer",
+    "members": "⚔️ 正式成员 / Party Members",
+    "helpers": "🛠️ 可黑工 / Helpers",
+    "status": "📌 状态 / Status",
+    "party_full": "✅ 队伍已满 / Party Full",
+
+    # Footer
+    "footer": (
+        "Join = 正式参战 / Party Member ｜ "
+        "可黑工 = 可支援但不计入人数 / Helper, not counted"
+    ),
+}
 
 
 # ============================================================
@@ -110,16 +137,16 @@ def parse_party_time(time_string: str):
 
 def format_party_datetime(dt: datetime):
     """
-    Display time nicely.
+    Display time with bilingual day label.
     """
 
     now = datetime.now(PARTY_TIMEZONE)
 
     if dt.date() == now.date():
-        day_text = "今天"
+        day_text = TEXT["today"]
 
     elif dt.date() == (now + timedelta(days=1)).date():
-        day_text = "明天"
+        day_text = TEXT["tomorrow"]
 
     else:
         day_text = dt.strftime("%d/%m")
@@ -131,11 +158,14 @@ def format_party_datetime(dt: datetime):
 # CHANGE MAX PLAYERS MODAL
 # ============================================================
 
-class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
+class ChangeMaxModal(
+    discord.ui.Modal,
+    title="修改人数 / Change Max Players"
+):
 
     new_max = discord.ui.TextInput(
-        label="New maximum players",
-        placeholder="例如：3 / 5 / 10",
+        label="新人数上限 / New maximum players",
+        placeholder="例如 / e.g. 3 / 5 / 10",
         required=True,
         max_length=2
     )
@@ -144,7 +174,10 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
         super().__init__()
         self.party_view = party_view
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
 
         try:
             new_max = int(self.new_max.value)
@@ -152,7 +185,8 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
         except ValueError:
 
             await interaction.response.send_message(
-                "❌ 请输入有效数字。",
+                "❌ 请输入有效数字。\n"
+                "Please enter a valid number.",
                 ephemeral=True
             )
             return
@@ -160,33 +194,40 @@ class ChangeMaxModal(discord.ui.Modal, title="Change Max Players"):
         if new_max < 1 or new_max > 50:
 
             await interaction.response.send_message(
-                "❌ 人数上限必须在 1–50 之间。",
+                "❌ 人数上限必须在 1–50 之间。\n"
+                "Maximum players must be between 1 and 50.",
                 ephemeral=True
             )
             return
 
-        current_players = len(self.party_view.players)
+        current_players = len(
+            self.party_view.players
+        )
 
         if new_max < current_players:
 
             await interaction.response.send_message(
                 f"❌ 当前已有 {current_players} 名正式成员，"
-                f"人数上限不能改成 {new_max}。",
+                f"人数上限不能改成 {new_max}。\n"
+                f"There are already {current_players} party members, "
+                f"so the maximum cannot be reduced to {new_max}.",
                 ephemeral=True
             )
             return
 
         self.party_view.max_players = new_max
+
         if self.party_view.party_id is not None:
             db.update_max_players(
                 self.party_view.party_id,
                 new_max
-    )
+            )
 
         await self.party_view.refresh_message()
 
         await interaction.response.send_message(
-            f"✅ 人数上限已修改为 **{new_max} 人**。",
+            f"✅ 人数上限已修改为 **{new_max} 人**。\n"
+            f"Maximum players changed to **{new_max}**.",
             ephemeral=True
         )
 
@@ -200,21 +241,28 @@ class AddPlayerSelect(discord.ui.UserSelect):
     def __init__(self, party_view):
 
         super().__init__(
-            placeholder="选择要加入正式队伍的玩家",
+            placeholder=(
+                "选择正式成员 / "
+                "Select player to add"
+            ),
             min_values=1,
             max_values=1
         )
 
         self.party_view = party_view
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
         member = self.values[0]
 
         if member.bot:
 
             await interaction.response.send_message(
-                "❌ 不能添加 Bot。",
+                "❌ 不能添加 Bot。\n"
+                "Bots cannot be added to the party.",
                 ephemeral=True
             )
             return
@@ -222,24 +270,34 @@ class AddPlayerSelect(discord.ui.UserSelect):
         if member.id in self.party_view.players:
 
             await interaction.response.send_message(
-                f"{member.mention} 已经在正式队伍里了。",
+                f"{member.mention} 已经在正式队伍里了。\n"
+                f"{member.mention} is already a party member.",
                 ephemeral=True
             )
             return
 
-        if len(self.party_view.players) >= self.party_view.max_players:
+        if (
+            len(self.party_view.players)
+            >= self.party_view.max_players
+        ):
 
             await interaction.response.send_message(
-                "❌ 队伍已经满员。",
+                "❌ 队伍已经满员。\n"
+                "The party is already full.",
                 ephemeral=True
             )
             return
 
-        # 可黑工 -> 正式成员
+        # Helper -> Party Member
         if member.id in self.party_view.helpers:
-            self.party_view.helpers.remove(member.id)
+            self.party_view.helpers.remove(
+                member.id
+            )
 
-        self.party_view.players.append(member.id)
+        self.party_view.players.append(
+            member.id
+        )
+
         if self.party_view.party_id is not None:
             db.set_member(
                 self.party_view.party_id,
@@ -247,11 +305,11 @@ class AddPlayerSelect(discord.ui.UserSelect):
                 "player"
             )
 
-
         await self.party_view.refresh_message()
 
         await interaction.response.send_message(
-            f"✅ 已将 {member.mention} 加入正式队伍。",
+            f"✅ 已将 {member.mention} 加入正式队伍。\n"
+            f"{member.mention} has been added to the party.",
             ephemeral=True
         )
 
@@ -276,44 +334,57 @@ class RemovePlayerSelect(discord.ui.UserSelect):
     def __init__(self, party_view):
 
         super().__init__(
-            placeholder="选择要移除的玩家",
+            placeholder=(
+                "选择要移除的玩家 / "
+                "Select player to remove"
+            ),
             min_values=1,
             max_values=1
         )
 
         self.party_view = party_view
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
         member = self.values[0]
 
         removed = False
 
         if member.id in self.party_view.players:
-            self.party_view.players.remove(member.id)
+            self.party_view.players.remove(
+                member.id
+            )
             removed = True
 
         if member.id in self.party_view.helpers:
-            self.party_view.helpers.remove(member.id)
+            self.party_view.helpers.remove(
+                member.id
+            )
             removed = True
 
         if not removed:
 
             await interaction.response.send_message(
-                f"❌ {member.mention} 不在这个活动里。",
+                f"❌ {member.mention} 不在这个活动里。\n"
+                f"{member.mention} is not registered for this party.",
                 ephemeral=True
             )
             return
+
         if self.party_view.party_id is not None:
             db.remove_member(
-            self.party_view.party_id,
-            member.id
-    )
+                self.party_view.party_id,
+                member.id
+            )
 
         await self.party_view.refresh_message()
 
         await interaction.response.send_message(
-            f"✅ 已将 {member.mention} 移出活动。",
+            f"✅ 已将 {member.mention} 移出活动。\n"
+            f"{member.mention} has been removed from the party.",
             ephemeral=True
         )
 
@@ -353,6 +424,7 @@ class CancelConfirmView(discord.ui.View):
     ):
 
         self.party_view.cancelled = True
+
         if self.party_view.party_id is not None:
             db.cancel_party(
                 self.party_view.party_id
@@ -360,13 +432,19 @@ class CancelConfirmView(discord.ui.View):
 
         for item in self.party_view.children:
 
-            if isinstance(item, discord.ui.Button):
+            if isinstance(
+                item,
+                discord.ui.Button
+            ):
                 item.disabled = True
 
         await self.party_view.refresh_message()
 
         await interaction.response.edit_message(
-            content="✅ 活动已取消。",
+            content=(
+                "✅ 活动已取消。\n"
+                "Party cancelled."
+            ),
             view=None
         )
 
@@ -382,7 +460,10 @@ class CancelConfirmView(discord.ui.View):
     ):
 
         await interaction.response.edit_message(
-            content="已取消操作。",
+            content=(
+                "已取消操作。\n"
+                "Action cancelled."
+            ),
             view=None
         )
 
@@ -411,8 +492,11 @@ class ManageView(discord.ui.View):
     ):
 
         await interaction.response.send_message(
-            "请选择要加入正式队伍的玩家：",
-            view=AddPlayerView(self.party_view),
+            "请选择要加入正式队伍的玩家。\n"
+            "Select a player to add to the party:",
+            view=AddPlayerView(
+                self.party_view
+            ),
             ephemeral=True
         )
 
@@ -433,14 +517,18 @@ class ManageView(discord.ui.View):
         ):
 
             await interaction.response.send_message(
-                "当前没有玩家可以移除。",
+                "当前没有玩家可以移除。\n"
+                "There are no registered players to remove.",
                 ephemeral=True
             )
             return
 
         await interaction.response.send_message(
-            "请选择要移除的玩家：",
-            view=RemovePlayerView(self.party_view),
+            "请选择要移除的玩家。\n"
+            "Select a player to remove:",
+            view=RemovePlayerView(
+                self.party_view
+            ),
             ephemeral=True
         )
 
@@ -456,7 +544,9 @@ class ManageView(discord.ui.View):
     ):
 
         await interaction.response.send_modal(
-            ChangeMaxModal(self.party_view)
+            ChangeMaxModal(
+                self.party_view
+            )
         )
 
     @discord.ui.button(
@@ -471,8 +561,11 @@ class ManageView(discord.ui.View):
     ):
 
         await interaction.response.send_message(
-            "⚠️ 确定要取消这个活动吗？",
-            view=CancelConfirmView(self.party_view),
+            "⚠️ 确定要取消这个活动吗？\n"
+            "Are you sure you want to cancel this party?",
+            view=CancelConfirmView(
+                self.party_view
+            ),
             ephemeral=True
         )
 
@@ -493,24 +586,20 @@ class PartyView(discord.ui.View):
     ):
 
         super().__init__(timeout=None)
+
         self.party_id = party_id
-
         self.activity_name = activity_name
-
         self.start_datetime = start_datetime
-
         self.max_players = max_players
-
         self.organizer = organizer
 
-        # 正式成员
+        # Actual party members
         self.players = []
 
-        # 可黑工
+        # Helpers - not counted towards max players
         self.helpers = []
 
         self.message = None
-
         self.cancelled = False
 
         # Prevent duplicate reminders
@@ -523,25 +612,34 @@ class PartyView(discord.ui.View):
 
     def build_embed(self):
 
-        current_players = len(self.players)
+        current_players = len(
+            self.players
+        )
 
         if self.cancelled:
 
             embed = discord.Embed(
-                title=f"❌ {self.activity_name}",
-                description="**此活动已取消**",
+                title=(
+                    f"❌ {self.activity_name}"
+                ),
+                description=(
+                    "**此活动已取消 / "
+                    "This party has been cancelled**"
+                ),
                 color=discord.Color.red()
             )
 
         else:
 
             embed = discord.Embed(
-                title=f"⚔️ {self.activity_name}",
+                title=(
+                    f"⚔️ {self.activity_name}"
+                ),
                 color=discord.Color.blue()
             )
 
         embed.add_field(
-            name="🕚 发车时间",
+            name=TEXT["start_time"],
             value=format_party_datetime(
                 self.start_datetime
             ),
@@ -549,18 +647,21 @@ class PartyView(discord.ui.View):
         )
 
         embed.add_field(
-            name="👥 正式人数",
-            value=f"{current_players} / {self.max_players}",
+            name=TEXT["player_count"],
+            value=(
+                f"{current_players} / "
+                f"{self.max_players}"
+            ),
             inline=True
         )
 
         embed.add_field(
-            name="👤 组织者",
+            name=TEXT["organizer"],
             value=self.organizer.mention,
             inline=False
         )
 
-        # 正式成员
+        # Party members
         if self.players:
 
             player_mentions = "\n".join(
@@ -570,15 +671,15 @@ class PartyView(discord.ui.View):
 
         else:
 
-            player_mentions = "暂无"
+            player_mentions = TEXT["none"]
 
         embed.add_field(
-            name="⚔️ 正式成员",
+            name=TEXT["members"],
             value=player_mentions,
             inline=False
         )
 
-        # 可黑工
+        # Helpers
         if self.helpers:
 
             helper_mentions = "\n".join(
@@ -588,10 +689,10 @@ class PartyView(discord.ui.View):
 
         else:
 
-            helper_mentions = "暂无"
+            helper_mentions = TEXT["none"]
 
         embed.add_field(
-            name="🛠️ 可黑工",
+            name=TEXT["helpers"],
             value=helper_mentions,
             inline=False
         )
@@ -599,11 +700,18 @@ class PartyView(discord.ui.View):
         # Status
         if not self.cancelled:
 
-            if current_players >= self.max_players:
+            if (
+                current_players
+                >= self.max_players
+            ):
 
                 embed.add_field(
-                    name="✅ 队伍已满",
-                    value="正式成员人数已达到上限。",
+                    name=TEXT["party_full"],
+                    value=(
+                        "正式成员人数已达到上限。\n"
+                        "The party has reached its "
+                        "maximum number of players."
+                    ),
                     inline=False
                 )
 
@@ -615,19 +723,18 @@ class PartyView(discord.ui.View):
                 )
 
                 embed.add_field(
-                    name="📌 状态",
+                    name=TEXT["status"],
                     value=(
                         f"还差 **{remaining}** "
-                        f"名正式成员！"
+                        f"名正式成员！\n"
+                        f"**{remaining}** more "
+                        f"player(s) needed!"
                     ),
                     inline=False
                 )
 
             embed.set_footer(
-                text=(
-                    "Join = 正式参战 ｜ "
-                    "可黑工 = 可支援但不计入人数"
-                )
+                text=TEXT["footer"]
             )
 
         return embed
@@ -666,7 +773,8 @@ class PartyView(discord.ui.View):
         if self.cancelled:
 
             await interaction.response.send_message(
-                "这个活动已经取消。",
+                "这个活动已经取消。\n"
+                "This party has already been cancelled.",
                 ephemeral=True
             )
             return
@@ -676,24 +784,33 @@ class PartyView(discord.ui.View):
         if user_id in self.players:
 
             await interaction.response.send_message(
-                "你已经是这个活动的正式成员。",
+                "你已经是这个活动的正式成员。\n"
+                "You are already a party member.",
                 ephemeral=True
             )
             return
 
-        if len(self.players) >= self.max_players:
+        if (
+            len(self.players)
+            >= self.max_players
+        ):
 
             await interaction.response.send_message(
-                "这个队伍已经满员了。",
+                "这个队伍已经满员了。\n"
+                "This party is already full.",
                 ephemeral=True
             )
             return
 
-        # 可黑工 -> 正式成员
+        # Helper -> Party Member
         if user_id in self.helpers:
-            self.helpers.remove(user_id)
+            self.helpers.remove(
+                user_id
+            )
 
-        self.players.append(user_id)
+        self.players.append(
+            user_id
+        )
 
         if self.party_id is not None:
             db.set_member(
@@ -709,11 +826,11 @@ class PartyView(discord.ui.View):
 
 
     # ========================================================
-    # 可黑工
+    # HELPER
     # ========================================================
 
     @discord.ui.button(
-        label="可黑工",
+        label="可黑工 / Helper",
         emoji="🛠️",
         style=discord.ButtonStyle.primary,
         custom_id="party_helper"
@@ -727,7 +844,8 @@ class PartyView(discord.ui.View):
         if self.cancelled:
 
             await interaction.response.send_message(
-                "这个活动已经取消。",
+                "这个活动已经取消。\n"
+                "This party has already been cancelled.",
                 ephemeral=True
             )
             return
@@ -737,16 +855,22 @@ class PartyView(discord.ui.View):
         if user_id in self.helpers:
 
             await interaction.response.send_message(
-                "你已经登记为可黑工。",
+                "你已经登记为可黑工。\n"
+                "You are already registered as a helper.",
                 ephemeral=True
             )
             return
 
-        # 正式 -> 可黑工
+        # Party Member -> Helper
         if user_id in self.players:
-            self.players.remove(user_id)
+            self.players.remove(
+                user_id
+            )
 
-        self.helpers.append(user_id)
+        self.helpers.append(
+            user_id
+        )
+
         if self.party_id is not None:
             db.set_member(
                 self.party_id,
@@ -779,7 +903,8 @@ class PartyView(discord.ui.View):
         if self.cancelled:
 
             await interaction.response.send_message(
-                "这个活动已经取消。",
+                "这个活动已经取消。\n"
+                "This party has already been cancelled.",
                 ephemeral=True
             )
             return
@@ -788,17 +913,22 @@ class PartyView(discord.ui.View):
 
         if user_id in self.players:
 
-            self.players.remove(user_id)
+            self.players.remove(
+                user_id
+            )
+
             if self.party_id is not None:
                 db.remove_member(
                     self.party_id,
                     user_id
                 )
 
-
         elif user_id in self.helpers:
 
-            self.helpers.remove(user_id)
+            self.helpers.remove(
+                user_id
+            )
+
             if self.party_id is not None:
                 db.remove_member(
                     self.party_id,
@@ -808,7 +938,8 @@ class PartyView(discord.ui.View):
         else:
 
             await interaction.response.send_message(
-                "你目前没有报名这个活动。",
+                "你目前没有报名这个活动。\n"
+                "You are not currently registered for this party.",
                 ephemeral=True
             )
             return
@@ -835,10 +966,14 @@ class PartyView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        if interaction.user.id != self.organizer.id:
+        if (
+            interaction.user.id
+            != self.organizer.id
+        ):
 
             await interaction.response.send_message(
-                "🔒 只有活动组织者可以管理这个活动。",
+                "🔒 只有活动组织者可以管理这个活动。\n"
+                "Only the party organizer can manage this party.",
                 ephemeral=True
             )
             return
@@ -846,18 +981,20 @@ class PartyView(discord.ui.View):
         if self.cancelled:
 
             await interaction.response.send_message(
-                "这个活动已经取消。",
+                "这个活动已经取消。\n"
+                "This party has already been cancelled.",
                 ephemeral=True
             )
             return
 
         await interaction.response.send_message(
-            f"⚙️ **管理：{self.activity_name}**\n\n"
-            f"正式成员："
+            f"⚙️ **管理 / Manage: "
+            f"{self.activity_name}**\n\n"
+            f"正式成员 / Party Members: "
             f"{len(self.players)} / "
             f"{self.max_players}\n"
-            f"可黑工："
-            f"{len(self.helpers)} 人",
+            f"可黑工 / Helpers: "
+            f"{len(self.helpers)}",
             view=ManageView(self),
             ephemeral=True
         )
@@ -882,15 +1019,17 @@ async def send_party_reminder(party):
 
     if party.party_id is not None:
         db.mark_reminder_sent(
-        party.party_id
-    )
+            party.party_id
+        )
 
     # Nobody joined
     if not party.players:
+
         print(
             f"ℹ️ Reminder skipped: "
             f"{party.activity_name} has no players."
         )
+
         return
 
     channel = bot.get_channel(
@@ -904,12 +1043,14 @@ async def send_party_reminder(party):
             "Check GENERAL_CHANNEL_ID."
         )
 
-        # Allow retry after config/error correction
+        # Allow retry
         party.reminder_sent = False
+
         if party.party_id is not None:
             db.reset_reminder(
                 party.party_id
-        )
+            )
+
         return
 
     mentions = " ".join(
@@ -925,28 +1066,38 @@ async def send_party_reminder(party):
         party.start_datetime - now
     ).total_seconds() / 60
 
-    # If created inside reminder window
-    if minutes_remaining < REMINDER_MINUTES_BEFORE:
+    # Created inside reminder window
+    if (
+        minutes_remaining
+        < REMINDER_MINUTES_BEFORE
+    ):
 
         message = (
-            f"🔔 **{party.activity_name} 即将发车！**\n\n"
+            f"🔔 **{party.activity_name} 即将发车！ "
+            f"/ Starting Soon!**\n\n"
             f"{mentions}\n\n"
             f"距离发车不足 "
             f"**{REMINDER_MINUTES_BEFORE} 分钟**，"
             f"请准备上线。\n"
-            f"🕚 发车时间："
-            f"{party.start_datetime.strftime('%H:%M')}"
+            f"Less than "
+            f"**{REMINDER_MINUTES_BEFORE} minutes** "
+            f"until start. Please get online and ready.\n\n"
+            f"🕚 发车时间 / Start Time: "
+            f"**{party.start_datetime.strftime('%H:%M')}**"
         )
 
     else:
 
         message = (
             f"🔔 **{party.activity_name} "
-            f"还有 {REMINDER_MINUTES_BEFORE} 分钟发车！**\n\n"
+            f"还有 {REMINDER_MINUTES_BEFORE} 分钟发车！**\n"
+            f"**{party.activity_name} starts in "
+            f"{REMINDER_MINUTES_BEFORE} minutes!**\n\n"
             f"{mentions}\n\n"
             f"请准备上线。\n"
-            f"🕚 发车时间："
-            f"{party.start_datetime.strftime('%H:%M')}"
+            f"Please get online and ready.\n\n"
+            f"🕚 发车时间 / Start Time: "
+            f"**{party.start_datetime.strftime('%H:%M')}**"
         )
 
     try:
@@ -1037,6 +1188,7 @@ async def reminder_scheduler():
                     party
                 )
 
+
 @reminder_scheduler.before_loop
 async def before_reminder_scheduler():
 
@@ -1046,6 +1198,7 @@ async def before_reminder_scheduler():
 # ============================================================
 # RECOVER DATABASE
 # ============================================================
+
 async def restore_parties():
 
     global database_restored
@@ -1062,7 +1215,9 @@ async def restore_parties():
         f"in database."
     )
 
-    now = datetime.now(PARTY_TIMEZONE)
+    now = datetime.now(
+        PARTY_TIMEZONE
+    )
 
     for row in rows:
 
@@ -1072,9 +1227,11 @@ async def restore_parties():
 
         # Ignore parties that have already finished
         if start_datetime <= now:
+
             db.complete_party(
-            row["id"]
-        )
+                row["id"]
+            )
+
             continue
 
         guild = bot.get_guild(
@@ -1092,15 +1249,18 @@ async def restore_parties():
             continue
 
         try:
+
             message = await channel.fetch_message(
                 row["message_id"]
             )
 
         except discord.NotFound:
+
             print(
                 f"⚠️ Party message "
                 f"{row['message_id']} no longer exists."
             )
+
             continue
 
         organizer = guild.get_member(
@@ -1110,6 +1270,7 @@ async def restore_parties():
         if organizer is None:
 
             try:
+
                 organizer = await guild.fetch_member(
                     row["organizer_id"]
                 )
@@ -1141,19 +1302,25 @@ async def restore_parties():
 
         for member in members:
 
-            if member["member_type"] == "player":
+            if (
+                member["member_type"]
+                == "player"
+            ):
 
                 view.players.append(
                     member["user_id"]
                 )
 
-            elif member["member_type"] == "helper":
+            elif (
+                member["member_type"]
+                == "helper"
+            ):
 
                 view.helpers.append(
                     member["user_id"]
                 )
 
-        # Register persistent buttons with Discord
+        # Register persistent buttons
         bot.add_view(
             view,
             message_id=row["message_id"]
@@ -1163,29 +1330,32 @@ async def restore_parties():
             view
         )
 
-        # Refresh Discord message
+        # Refresh original Discord message
         await view.refresh_message()
 
         print(
             f"♻️ Restored: "
             f"{view.activity_name} | "
-            f"{len(view.players)}/{view.max_players}"
+            f"{len(view.players)}/"
+            f"{view.max_players}"
         )
 
+
 # ============================================================
-# TEST
+# TEST COMMAND
 # ============================================================
 
 @bot.tree.command(
     name="test",
-    description="Check whether WWM Bot is online"
+    description="Check whether WWM Party Bot is online"
 )
 async def test(
     interaction: discord.Interaction
 ):
 
     await interaction.response.send_message(
-        "✅ WWM Party Bot is online!",
+        "✅ WWM Party Bot is online!\n"
+        "机器人运行正常！",
         ephemeral=True
     )
 
@@ -1196,26 +1366,41 @@ async def test(
 
 @bot.tree.command(
     name="party",
-    description="Create a WWM party recruitment post"
+    description="创建组队 / Create a WWM party"
 )
 @app_commands.describe(
-    activity="活动名称，例如：百业十人本",
-    time="发车时间，24小时制，例如：23:00",
-    max_players="正式参战人数上限，例如：3 或 10"
+    activity=(
+        "活动名称 / Activity name, "
+        "例如 / e.g. 百业十人本"
+    ),
+    time=(
+        "发车时间 / Start time, "
+        "24小时制 / 24-hour format, e.g. 23:00"
+    ),
+    max_players=(
+        "正式人数上限 / Maximum party members, "
+        "例如 / e.g. 3 or 10"
+    )
 )
 async def party(
     interaction: discord.Interaction,
     activity: str,
     time: str,
-    max_players: app_commands.Range[int, 1, 50]
+    max_players: app_commands.Range[
+        int,
+        1,
+        50
+    ]
 ):
 
     if interaction.guild is None:
 
         await interaction.response.send_message(
-            "这个命令只能在服务器中使用。",
+            "这个命令只能在服务器中使用。\n"
+            "This command can only be used inside a server.",
             ephemeral=True
         )
+
         return
 
     # -------------------------
@@ -1229,11 +1414,14 @@ async def party(
     if start_datetime is None:
 
         await interaction.response.send_message(
-            "❌ **时间格式不正确。**\n\n"
+            "❌ **时间格式不正确 / Invalid time format**\n\n"
             "请使用24小时制 `HH:MM`\n"
-            "例如：`20:00`、`23:30`、`00:30`",
+            "Please use 24-hour format `HH:MM`\n\n"
+            "例如 / Examples: "
+            "`20:00`, `23:30`, `00:30`",
             ephemeral=True
         )
+
         return
 
     # -------------------------
@@ -1258,15 +1446,21 @@ async def party(
 
     # Save party to database
     view.party_id = db.create_party(
-    guild_id=interaction.guild.id,
-    channel_id=view.message.channel.id,
-    message_id=view.message.id,
-    activity_name=view.activity_name,
-    start_datetime=view.start_datetime.isoformat(),
-    max_players=view.max_players,
-    organizer_id=interaction.user.id,
-    created_at=datetime.now(PARTY_TIMEZONE).isoformat()
-)
+        guild_id=interaction.guild.id,
+        channel_id=view.message.channel.id,
+        message_id=view.message.id,
+        activity_name=view.activity_name,
+        start_datetime=(
+            view.start_datetime.isoformat()
+        ),
+        max_players=view.max_players,
+        organizer_id=interaction.user.id,
+        created_at=(
+            datetime.now(
+                PARTY_TIMEZONE
+            ).isoformat()
+        )
+    )
 
     active_parties.append(
         view
@@ -1302,7 +1496,8 @@ async def on_ready():
 
     print(
         f"🔔 Reminder: "
-        f"{REMINDER_MINUTES_BEFORE} minutes before"
+        f"{REMINDER_MINUTES_BEFORE} "
+        f"minutes before"
     )
 
     guild = discord.Object(
@@ -1326,6 +1521,7 @@ async def on_ready():
         )
 
         for command in synced:
+
             print(
                 f"   /{command.name}"
             )
@@ -1338,7 +1534,6 @@ async def on_ready():
 
     await restore_parties()
 
-    # Start scheduler only once
     if not reminder_scheduler.is_running():
 
         reminder_scheduler.start()
@@ -1350,9 +1545,10 @@ async def on_ready():
         )
 
 
-
 # ============================================================
 # START BOT
 # ============================================================
+
 db.init_database()
+
 bot.run(TOKEN)
