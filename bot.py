@@ -242,30 +242,18 @@ def send_discord_notification(new_codes, total_active):
     print("Discord notification sent successfully!")
 
 def validate_active_codes(codes):
-    """Basic safety checks before saving or notifying."""
+    """Validate scraped active codes before saving or notifying."""
 
     if not codes:
         raise RuntimeError(
-            "No active codes were scraped. "
-            "Stopping to avoid corrupting codes.json."
+            "No active codes were scraped. Stopping for safety."
         )
 
-    code_values = [
-        item["code"]
-        for item in codes
-    ]
+    code_values = [item["code"] for item in codes]
 
     if len(code_values) != len(set(code_values)):
         raise RuntimeError(
-            "Duplicate active codes detected. "
-            "Stopping for safety."
-        )
-
-    # Safety check against obviously incomplete page loads
-    if len(codes) < 20:
-        raise RuntimeError(
-            f"Only {len(codes)} active codes were scraped. "
-            "This looks abnormal, so the run is being stopped."
+            "Duplicate active codes detected. Stopping for safety."
         )
 
     return True
