@@ -43,6 +43,8 @@ REMINDER_CHECK_SECONDS = 30
 
 # Party timezone
 PARTY_TIMEZONE = ZoneInfo("Australia/Melbourne")
+NEW_ZEALAND_TIMEZONE = ZoneInfo("Pacific/Auckland")
+BRISBANE_TIMEZONE = ZoneInfo("Australia/Brisbane")
 
 
 # ============================================================
@@ -152,6 +154,21 @@ def format_party_datetime(dt: datetime):
         day_text = dt.strftime("%d/%m")
 
     return f"{day_text} {dt.strftime('%H:%M')}"
+
+
+def format_local_party_time(start_datetime: datetime, timezone: ZoneInfo):
+    """Convert a Melbourne party start into a destination's local date/time."""
+    local_dt = start_datetime.astimezone(timezone)
+    local_today = datetime.now(timezone).date()
+
+    if local_dt.date() == local_today:
+        day_text = TEXT["today"]
+    elif local_dt.date() == local_today + timedelta(days=1):
+        day_text = TEXT["tomorrow"]
+    else:
+        day_text = local_dt.strftime("%d/%m")
+
+    return f"{day_text} {local_dt.strftime('%H:%M')}"
 
 
 # ============================================================
@@ -640,8 +657,10 @@ class PartyView(discord.ui.View):
 
         embed.add_field(
             name=TEXT["start_time"],
-            value=format_party_datetime(
-                self.start_datetime
+            value=(
+                f"{format_party_datetime(self.start_datetime)}\n"
+                f"🟣 🇳🇿 NZ: {format_local_party_time(self.start_datetime, NEW_ZEALAND_TIMEZONE)}\n"
+                f"🟠 🇦🇺 Brisbane: {format_local_party_time(self.start_datetime, BRISBANE_TIMEZONE)}"
             ),
             inline=True
         )
